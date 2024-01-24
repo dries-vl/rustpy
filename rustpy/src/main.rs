@@ -1,8 +1,8 @@
-use std::{fs, io};
+use std::{fs, io, thread};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, mpsc, Mutex};
 use std::time::SystemTime;
 
 use cpython::{py_fn, py_module_initializer, PyObject, PyResult, Python};
@@ -14,10 +14,12 @@ use rustpy_macros::measure_time;
 use crate::button::Button;
 use crate::button::button_result::ButtonResult;
 use crate::dylib_reloader::start_http_server;
+use crate::reload_dylib::build_dylib;
 
 mod button;
 mod menu;
 mod dylib_reloader;
+mod reload_dylib;
 
 const CONSTANT: i32 = 1;
 
@@ -73,11 +75,18 @@ fn get_last_modified_time(file_path: &str) -> SystemTime {
 }
 
 fn main() {
-    start_http_server();
+    // Create a channel
+    let (sender, receiver) = mpsc::channel();
+
+    // Start the HTTP server in a new thread with the sender
+    let http_sender = sender.clone();
+    thread::spawn(move || {
+        // Pass the sender to the HTTP server function
+        start_http_server(http_sender);
+    });
 
     // Initialize the dylib
     let mut lib = unsafe { Library::new("target/debug/rustpy_dylib.dll") }.expect("Failed to load library");
-    let mut last_modified = SystemTime::UNIX_EPOCH;
     type AddOne = unsafe extern "C" fn(i32) -> i32;
     let mut add_one: Symbol<AddOne> = unsafe { lib.get(b"add_one").expect("Failed to load function") };
 
@@ -119,13 +128,14 @@ fn main() {
         }
 
         // Reload the dylib
-        let current_modified = get_last_modified_time("target/debug/rustpy_dylib.dll");
-        if current_modified > last_modified {
-            // Drop the old library and load the new one
-            drop(lib);
-            lib = unsafe { Library::new("target/debug/rustpy_dylib.dll") }.expect("Failed to load library");
-            add_one = unsafe { lib.get(b"add_one").expect("Failed to load function") };
-            last_modified = current_modified;
+        if let Ok(msg) = receiver.try_recv() {
+            if msg == "reload" {
+                // Perform the reloading of the library
+                drop(lib);
+                build_dylib("rustpy-dylib");
+                lib = unsafe { Library::new("target/debug/rustpy_dylib.dll") }.expect("Failed to load library");
+                add_one = unsafe { lib.get(b"add_one").expect("Failed to load function") };
+            }
         }
         let result = unsafe { add_one(15) };
 
