@@ -1,0 +1,9 @@
+[package]
+name = "rustpy-dylib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[lib]
+crate-type = ["rlib", "dylib"] # Needs both rlib and dylib to work

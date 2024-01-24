@@ -1,5 +1,28 @@
 [workspace]
+resolver = "2"
 members = [
     "rustpy",
-    "rustpy_macros"
+    "rustpy-macros",
+    "rustpy-dylib"
 ]
+
+[profile.release]
+panic = "abort"     # abort immediately rather than unwind, removes need for extra unwinding code; smaller binary
+strip = "symbols"   # remove symbols from binary; smaller binary
+opt-level = 'z'     # z is for smallest possible binary including no loop vectorization, 3 is most speed, 0 for faster compilation
+codegen-units = 1   # Reduce Parallel Code Generation Units to Increase Optimization
+lto = true          # longer compile time, more optimization
+incremental = false # recompile fully to ensure optimizations
+
+[profile.release.build-override] # also override dependencies' builds to optimize further
+strip = "symbols"
+opt-level = 'z'
+codegen-units = 1
+
+[profile.dev]       # faster compile time for dev builds
+panic = "unwind"
+strip = "none"
+opt-level = 0
+codegen-units = 256
+lto = false
+incremental = true
