@@ -1,8 +1,9 @@
+use std::{fs, io};
 use std::collections::HashMap;
-use std::{fs, io, thread};
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use cpython::{py_fn, py_module_initializer, PyObject, PyResult, Python};
 use lazy_static::lazy_static;
@@ -12,9 +13,11 @@ use rustpy_macros::measure_time;
 
 use crate::button::Button;
 use crate::button::button_result::ButtonResult;
+use crate::dylib_reloader::start_http_server;
 
 mod button;
 mod menu;
+mod dylib_reloader;
 
 const CONSTANT: i32 = 1;
 
@@ -63,14 +66,20 @@ pub const fn add(a: i32, b: i32) -> i32 {
     a + b
 }
 
-fn main() {
+fn get_last_modified_time(file_path: &str) -> SystemTime {
+    fs::metadata(file_path)
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
 
-    let lib = unsafe { Library::new("target/debug/rustpy_dylib.dll") }.expect("Failed to load library");
+fn main() {
+    start_http_server();
+
+    // Initialize the dylib
+    let mut lib = unsafe { Library::new("target/debug/rustpy_dylib.dll") }.expect("Failed to load library");
+    let mut last_modified = SystemTime::UNIX_EPOCH;
     type AddOne = unsafe extern "C" fn(i32) -> i32;
-    let mut add_one: Symbol<AddOne> = unsafe {
-        lib.get(b"add_one").expect("Failed to load function")
-    };
-    drop(lib);
+    let mut add_one: Symbol<AddOne> = unsafe { lib.get(b"add_one").expect("Failed to load function") };
 
     add_button(Button::new("button1".to_string()));
     add_button(Button::new("button2".to_string()));
@@ -95,10 +104,6 @@ fn main() {
 
     // Example CLI interface
     loop {
-        let lib = unsafe { Library::new("target/debug/rustpy_dylib.dll") }.expect("Failed to load library");
-        add_one = unsafe { lib.get(b"add_one").expect("Failed to load function") };
-        let result = unsafe { add_one(15) };
-        drop(lib); // lib is released by the process, can replace the dll with the new one
         println!("Please enter a python command (or type 'exit' to quit):");
 
         // Read user input
@@ -112,6 +117,17 @@ fn main() {
         if input.eq_ignore_ascii_case("exit") {
             break;
         }
+
+        // Reload the dylib
+        let current_modified = get_last_modified_time("target/debug/rustpy_dylib.dll");
+        if current_modified > last_modified {
+            // Drop the old library and load the new one
+            drop(lib);
+            lib = unsafe { Library::new("target/debug/rustpy_dylib.dll") }.expect("Failed to load library");
+            add_one = unsafe { lib.get(b"add_one").expect("Failed to load function") };
+            last_modified = current_modified;
+        }
+        let result = unsafe { add_one(15) };
 
         // Respond with a predefined message
         println!("Your response: '{:?}'", result);

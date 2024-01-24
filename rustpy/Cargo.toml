@@ -10,5 +10,7 @@ rustpy-dylib = { path = "../rustpy-dylib" }
 libloading = "0.8.1"
 cpython = {version = "0.7.1"}
 lazy_static = "1.4.0"
+notify = "6.1.1"
+tiny_http = "0.12.0"
 
 
