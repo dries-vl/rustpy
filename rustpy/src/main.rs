@@ -1,25 +1,27 @@
+#![feature(lazy_cell)]
+
 use std::{fs, io, thread};
 use std::collections::HashMap;
 use std::io::Write;
+use std::ops::Deref;
 use std::path::Path;
 use std::sync::{Arc, mpsc, Mutex};
 use std::time::SystemTime;
 
 use cpython::{py_fn, py_module_initializer, PyObject, PyResult, Python};
 use lazy_static::lazy_static;
-use libloading::{Library, Symbol};
 
 use rustpy_macros::measure_time;
 
 use crate::button::Button;
 use crate::button::button_result::ButtonResult;
 use crate::dylib_reloader::start_http_server;
-use crate::reload_dylib::build_dylib;
 
 mod button;
 mod menu;
 mod dylib_reloader;
 mod reload_dylib;
+mod my_dy_lib;
 
 const CONSTANT: i32 = 1;
 
@@ -79,16 +81,21 @@ fn main() {
     let (sender, receiver) = mpsc::channel();
 
     // Start the HTTP server in a new thread with the sender
-    let http_sender = sender.clone();
-    thread::spawn(move || {
-        // Pass the sender to the HTTP server function
-        start_http_server(http_sender);
-    });
+    my_dy_lib::reload();
+    start_http_server(sender);
 
-    // Initialize the dylib
-    let mut lib = unsafe { Library::new("target/debug/rustpy_dylib.dll") }.expect("Failed to load library");
-    type AddOne = unsafe extern "C" fn(i32) -> i32;
-    let mut add_one: Symbol<AddOne> = unsafe { lib.get(b"add_one").expect("Failed to load function") };
+    let receiver = Arc::new(Mutex::new(receiver));
+
+    // Worker thread
+    let worker_receiver = Arc::clone(&receiver);
+    thread::spawn(move || {
+        while let Ok(msg) = worker_receiver.lock().unwrap().recv() {
+            // Process message
+            if msg == "reload" {
+                my_dy_lib::reload();
+            }
+        }
+    });
 
     add_button(Button::new("button1".to_string()));
     add_button(Button::new("button2".to_string()));
@@ -127,17 +134,7 @@ fn main() {
             break;
         }
 
-        // Reload the dylib
-        if let Ok(msg) = receiver.try_recv() {
-            if msg == "reload" {
-                // Perform the reloading of the library
-                drop(lib);
-                build_dylib("rustpy-dylib");
-                lib = unsafe { Library::new("target/debug/rustpy_dylib.dll") }.expect("Failed to load library");
-                add_one = unsafe { lib.get(b"add_one").expect("Failed to load function") };
-            }
-        }
-        let result = unsafe { add_one(15) };
+        let result = my_dy_lib::add_one(15);
 
         // Respond with a predefined message
         println!("Your response: '{:?}'", result);
